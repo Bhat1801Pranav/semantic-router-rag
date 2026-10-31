@@ -12,26 +12,48 @@ query = st.text_input("Ask a question:")
 
 if st.button("Submit"):
     if query.strip():
-        with st.spinner("Searching and re-ranking..."):
+        with st.spinner("Connecting to backend and searching..."):
             try:
-                # Adjust the "/query" endpoint below if your main.py uses a different route name (like "/search" or "/chat")
-                response = requests.post(f"{BACKEND_URL}/query", json={"query": query})
+                # Smart auto-detect: tries the most common FastAPI endpoint names
+                endpoints = ["/search", "/query", "/chat", "/ask", "/generate", "/api/search"]
+                success = False
                 
-                if response.status_code == 200:
-                    data = response.json()
+                for ep in endpoints:
+                    # Attempt 1: Assumes backend expects {"query": "..."}
+                    response = requests.post(f"{BACKEND_URL}{ep}", json={"query": query})
                     
-                    # Assuming your backend returns {"answer": "...", "sources": [...] }
-                    # Adjust these keys if your main.py returns different dictionary keys
-                    if "answer" in data:
-                        st.markdown("### Answer")
-                        st.write(data["answer"])
-                    else:
-                        st.write(data)
+                    if response.status_code == 200:
+                        data = response.json()
+                        success = True
                         
-                else:
-                    st.error(f"Backend Error {response.status_code}: {response.text}")
+                        st.markdown("### Answer")
+                        if "answer" in data:
+                            st.write(data["answer"])
+                        elif "response" in data:
+                            st.write(data["response"])
+                        elif "result" in data:
+                            st.write(data["result"])
+                        else:
+                            st.write(data) # Fallback to display raw JSON
+                        break
+                    
+                    # Attempt 2: If 422 Unprocessable Entity, backend endpoint exists but expects {"text": "..."} instead
+                    elif response.status_code == 422:
+                        response_alt = requests.post(f"{BACKEND_URL}{ep}", json={"text": query})
+                        if response_alt.status_code == 200:
+                            data = response_alt.json()
+                            success = True
+                            
+                            st.markdown("### Answer")
+                            if "answer" in data: st.write(data["answer"])
+                            elif "response" in data: st.write(data["response"])
+                            else: st.write(data)
+                            break
+                
+                if not success:
+                    st.error("Backend Error 404: Could not find the correct endpoint. Open your `main.py` file in VS Code, look for the `@app.post(...)` line, and verify the route name!")
                     
             except requests.exceptions.RequestException as e:
-                st.error(f"Failed to connect to the backend. Make sure the Render service is awake! Error: {e}")
+                st.error(f"Failed to connect to the backend. Error: {e}")
     else:
         st.warning("Please enter a query first.")

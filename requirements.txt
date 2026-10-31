@@ -7,3 +7,5 @@ sentence-transformers
 rank-bm25
 google-generativeai
 python-dotenv
+streamlit
+requests

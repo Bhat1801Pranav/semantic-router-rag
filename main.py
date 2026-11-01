@@ -31,7 +31,8 @@ class MLProxy:
 
     def encode(self, texts, *args, **kwargs):
         """Uses Gemini's API for zero-RAM embeddings instead of local PyTorch."""
-        if isinstance(texts, str):
+        is_string = isinstance(texts, str)
+        if is_string:
             texts = [texts]
         
         # Call Gemini's ultra-fast embedding model
@@ -39,8 +40,10 @@ class MLProxy:
             model="models/gemini-embedding-001",
             content=texts
         )
-        return np.array(response['embedding'])
-
+        
+        arr = np.array(response['embedding'])
+        # Return 1D array for single string to match old PyTorch behavior and keep ChromaDB happy
+        return arr[0] if is_string else arr
     def predict(self, pairs, *args, **kwargs):
         """Bypasses the heavy CrossEncoder to prevent 512MB RAM crashes."""
         # Returns fallback scores preserving the original retrieval order

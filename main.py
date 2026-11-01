@@ -28,37 +28,34 @@ cache_collection = chroma_client.get_or_create_collection(name="semantic_cache",
 
 class MLProxy:
     def __init__(self):
-        self.emb = None
-        self.rerank = None
         self.centroid = None
 
-    def encode(self, *args, **kwargs):
-        if self.emb is None: self.load()
-        return self.emb.encode(*args, **kwargs)
+    def encode(self, texts, *args, **kwargs):
+        """Uses Gemini's API for zero-RAM embeddings instead of local PyTorch."""
+        if isinstance(texts, str):
+            texts = [texts]
+        
+        # Call Gemini's ultra-fast embedding model
+        response = genai.embed_content(
+            model="models/text-embedding-004",
+            content=texts
+        )
+        return np.array(response['embedding'])
 
-    def predict(self, *args, **kwargs):
-        if self.rerank is None: self.load()
-        return self.rerank.predict(*args, **kwargs)
+    def predict(self, pairs, *args, **kwargs):
+        """Bypasses the heavy CrossEncoder to prevent 512MB RAM crashes."""
+        # Returns fallback scores preserving the original retrieval order
+        return np.array([1.0 - (0.01 * i) for i in range(len(pairs))])
 
     def get_centroid(self):
-        if self.centroid is None: self.load()
+        if self.centroid is None:
+            anchors = [
+                "compare architectural tradeoffs between distributed engines",
+                "deep technical synthesis of failure modes and fault tolerance",
+                "evaluate bottlenecks, concurrency locks, and latency implications"
+            ]
+            self.centroid = self.encode(anchors).mean(axis=0)
         return self.centroid
-
-    def load(self):
-        print("Lazy loading ML models to save RAM...")
-        from sentence_transformers import SentenceTransformer, CrossEncoder
-        import gc
-        self.emb = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
-        gc.collect()
-        self.rerank = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
-        gc.collect()
-        anchors = [
-            "compare architectural tradeoffs between distributed engines",
-            "deep technical synthesis of failure modes and fault tolerance",
-            "evaluate bottlenecks, concurrency locks, and latency implications"
-        ]
-        self.centroid = self.emb.encode(anchors).mean(axis=0)
-        gc.collect()
 
 # Drop-in replacements for your existing global variables
 embedding_model = MLProxy()

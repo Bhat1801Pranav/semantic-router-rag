@@ -36,7 +36,7 @@ class MLProxy:
         
         # Call Gemini's ultra-fast embedding model
         response = genai.embed_content(
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             content=texts
         )
         return np.array(response['embedding'])

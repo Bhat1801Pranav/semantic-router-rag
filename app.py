@@ -14,7 +14,6 @@ if st.button("Submit"):
     if query.strip():
         with st.spinner("Searching and generating response..."):
             try:
-                # Use stream=True to support FastAPI StreamingResponse
                 response = requests.post(
                     f"{BACKEND_URL}/query-stream",
                     json={"query": query},
@@ -27,25 +26,29 @@ if st.button("Submit"):
                     answer_placeholder = st.empty()
                     full_response = ""
                     
-                    # Read chunks as they arrive from the stream
-                    for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
-                        if chunk:
-                            full_response += chunk
-                            answer_placeholder.markdown(full_response)
-                    
-                    # If the backend returned a raw JSON string, format it cleanly
-                    if full_response.strip().startswith("{") and full_response.strip().endswith("}"):
-                        try:
-                            parsed = json.loads(full_response)
-                            if "answer" in parsed:
-                                answer_placeholder.markdown(parsed["answer"])
-                            elif "response" in parsed:
-                                answer_placeholder.markdown(parsed["response"])
-                        except json.JSONDecodeError:
-                            pass
+                    # Process the Server-Sent Events (SSE) stream line by line
+                    for line in response.iter_lines(decode_unicode=True):
+                        if line and line.startswith("data: "):
+                            data_str = line[6:] # Remove the "data: " prefix
                             
+                            if data_str.strip() == "[DONE]":
+                                break
+                            
+                            try:
+                                # Parse the JSON payload
+                                data_json = json.loads(data_str)
+                                
+                                # Extract and append only the text tokens
+                                if data_json.get("type") == "token":
+                                    full_response += data_json.get("content", "")
+                                    # Update the UI with the clean text
+                                    answer_placeholder.markdown(full_response)
+                                    
+                            except json.JSONDecodeError:
+                                continue
+                                
                     if not full_response.strip():
-                        st.warning("The backend returned an empty response. Check your Render logs to ensure GEMINI_API_KEY is set and ChromaDB is populated.")
+                        st.warning("The backend returned an empty response. Check if ChromaDB is populated.")
                 else:
                     st.error(f"Backend Error {response.status_code}: {response.text}")
                     

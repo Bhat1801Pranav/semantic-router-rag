@@ -1,58 +1,44 @@
 import streamlit as st
 import requests
-import json
 
-BACKEND_URL = "https://semantic-router-rag.onrender.com"
+st.title("Enterprise Hybrid RAG Pipeline 💬")
+st.caption("Powered by FastAPI, ChromaDB, and Gemini AI")
 
-st.set_page_config(page_title="Hybrid RAG Search", layout="centered")
-st.title("Enterprise Hybrid RAG Pipeline")
-st.write("Powered by FastAPI, ChromaDB, and Gemini AI")
+# 1. Initialize the chat history in Streamlit's session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-query = st.text_input("Ask a question:")
+# 2. Display previous chat messages when the app reruns
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-if st.button("Submit"):
-    if query.strip():
-        with st.spinner("Searching and generating response..."):
-            try:
-                response = requests.post(
-                    f"{BACKEND_URL}/query-stream",
-                    json={"query": query},
-                    stream=True,
-                    timeout=120
-                )
-                
-                if response.status_code == 200:
-                    st.markdown("### Answer")
-                    answer_placeholder = st.empty()
-                    full_response = ""
-                    
-                    # Process the Server-Sent Events (SSE) stream line by line
-                    for line in response.iter_lines(decode_unicode=True):
-                        if line and line.startswith("data: "):
-                            data_str = line[6:] # Remove the "data: " prefix
-                            
-                            if data_str.strip() == "[DONE]":
-                                break
-                            
-                            try:
-                                # Parse the JSON payload
-                                data_json = json.loads(data_str)
-                                
-                                # Extract and append only the text tokens
-                                if data_json.get("type") == "token":
-                                    full_response += data_json.get("content", "")
-                                    # Update the UI with the clean text
-                                    answer_placeholder.markdown(full_response)
-                                    
-                            except json.JSONDecodeError:
-                                continue
-                                
-                    if not full_response.strip():
-                        st.warning("The backend returned an empty response. Check if ChromaDB is populated.")
-                else:
-                    st.error(f"Backend Error {response.status_code}: {response.text}")
-                    
-            except Exception as e:
-                st.error(f"Connection Error: {e}")
-    else:
-        st.warning("Please enter a query first.")
+# 3. Accept user input at the bottom of the screen
+if prompt := st.chat_input("Ask a question about the documents..."):
+    
+    # Display the user's question instantly
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    # Save the user's question to history
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # 4. Fetch and display the AI's response
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        
+        try:
+            # ---> PASTE YOUR EXISTING BACKEND REQUEST HERE <---
+            # Example: response = requests.post("YOUR_RENDER_URL", json={"query": prompt})
+            # answer = response.text
+            
+            # (Replace this placeholder variable with your actual backend answer)
+            answer = "This is where your FastAPI backend answer will appear."
+            
+            message_placeholder.markdown(answer)
+            
+            # Save the AI's answer to history so it stays on screen
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+            
+        except Exception as e:
+            st.error(f"Backend Error: {e}")

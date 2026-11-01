@@ -1,21 +1,19 @@
+import json
 import streamlit as st
 import requests
 
 st.title("Enterprise Hybrid RAG Pipeline 💬")
 st.caption("Powered by FastAPI, ChromaDB, and Gemini AI")
 
-BACKEND_URL = "https://semantic-router-rag.onrender.com/query"
+BACKEND_URL = "https://semantic-router-rag.onrender.com/query-stream"
 
-# 1. Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 2. Render existing conversation history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 3. Handle new user input
 if prompt := st.chat_input("Ask a question about the documents..."):
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -33,10 +31,19 @@ if prompt := st.chat_input("Ask a question about the documents..."):
                 timeout=120
             ) as response:
                 if response.status_code == 200:
-                    for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
-                        if chunk:
-                            full_response += chunk
-                            message_placeholder.markdown(full_response + "▌")
+                    for line in response.iter_lines(decode_unicode=True):
+                        if line and line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                payload = json.loads(data_str)
+                                if payload.get("type") == "token":
+                                    full_response += payload.get("content", "")
+                                    message_placeholder.markdown(full_response + "▌")
+                            except json.JSONDecodeError:
+                                pass
+                                
                     message_placeholder.markdown(full_response)
                     st.session_state.messages.append({"role": "assistant", "content": full_response})
                 else:

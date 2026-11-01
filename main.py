@@ -124,7 +124,7 @@ def select_model_tier(query: str, query_emb) -> tuple[str, str]:
         return "gemini-2.5-flash", "complex_analytical"
     return "gemini-2.0-flash", "simple_factual"
 
-def hybrid_search_and_rerank(query: str, query_emb, top_k: int = 2) -> list[str]:
+def hybrid_search_and_rerank(query: str, query_emb, top_k: int = 5) -> list[str]:
     """Combines BM25 sparse retrieval + Chroma dense retrieval, then reranks with Cross-Encoder."""
     ensure_kb_ready()
     if not kb_corpus:
@@ -145,7 +145,7 @@ def hybrid_search_and_rerank(query: str, query_emb, top_k: int = 2) -> list[str]
     dense_docs = dense_results["documents"][0] if dense_results["documents"] else []
 
     # 3. Combine and Deduplicate
-    unique_docs = list(set(sparse_docs + dense_docs))
+    unique_docs = list(dict.fromkeys(dense_docs + sparse_docs))
     if not unique_docs:
         return []
 
@@ -247,7 +247,7 @@ def process_query_stream(request: QueryRequest):
 
     # --- 2. HYBRID RETRIEVAL & RE-RANKING ---
     system_metrics["cache_misses"] += 1
-    top_context = hybrid_search_and_rerank(query_text, query_emb, top_k=2)
+    top_context = hybrid_search_and_rerank(query_text, query_emb, top_k=5)
     context_str = "\n".join(top_context)
 
     # --- 3. MODEL ROUTER ---

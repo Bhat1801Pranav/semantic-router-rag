@@ -35,6 +35,26 @@ cache_collection = chroma_client.get_or_create_collection(
 CACHE_DISTANCE_THRESHOLD = 0.12
 CACHE_TTL_SECONDS = 86400  # 24-hour Time-To-Live
 
+# --- AUTO-SEED KNOWLEDGE BASE ON STARTUP IF EMPTY ---
+if kb_collection.count() == 0:
+    seed_docs = [
+        "Project Alpha is the next-generation autonomous edge AI platform designed for low-latency inferencing on decentralized micro-servers. It is targeted for launch in Q3 2027 and is led by the core Systems & Applied AI team.",
+        "Project Alpha architecture utilizes a hybrid retrieval-augmented generation (RAG) system paired with semantic routing to minimize API token consumption and improve query response times under 200 milliseconds.",
+        "Project Beta is a data synchronization pipeline that facilitates automated ETL transfers between local SQLite instances and distributed analytical warehouses.",
+        "The Enterprise RAG Pipeline uses ChromaDB as its vector store, BM25Okapi for sparse keyword retrieval, CrossEncoder (ms-marco-MiniLM-L-6-v2) for reranking, and sentence-transformers (all-MiniLM-L6-v2) for local dense embeddings."
+    ]
+    seed_meta = [
+        {"source": "project_alpha_spec.pdf", "topic": "Project Alpha Overview"},
+        {"source": "project_alpha_architecture.md", "topic": "Project Alpha Tech Stack"},
+        {"source": "project_beta_overview.txt", "topic": "Project Beta Overview"},
+        {"source": "rag_infra_doc.md", "topic": "Infrastructure Overview"}
+    ]
+    seed_ids = [f"doc_{i+1}" for i in range(len(seed_docs))]
+    seed_embs = embedding_model.encode(seed_docs).tolist()
+    kb_collection.upsert(ids=seed_ids, documents=seed_docs, metadatas=seed_meta, embeddings=seed_embs)
+    if cache_collection.count() > 0:
+        cache_collection.delete(ids=cache_collection.get()["ids"])
+
 # --- REBUILD BM25 SPARSE INDEX ON STARTUP ---
 all_docs = kb_collection.get()
 kb_corpus = all_docs["documents"] if all_docs and all_docs["documents"] else []
@@ -58,8 +78,8 @@ system_metrics = {
     "evicted_expired_cache_items": 0,
     "model_usage": {
         "cache": 0,
-        "gemini-3.5-flash": 0,
-        "gemini-3.8-flash": 0,
+        "gemini-2.5-flash": 0,
+        "gemini-2.0-flash": 0,
         "local-extractive-fallback": 0
     },
     "latencies_ms": {"cache_hit": [], "llm_inference": []},

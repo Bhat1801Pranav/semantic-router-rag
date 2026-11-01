@@ -120,20 +120,33 @@ def hybrid_search_and_rerank(query: str, query_emb, top_k: int = 2) -> list[str]
     ensure_kb_ready()
     if not kb_corpus:
         return []
+        
+    # 1. Sparse Retrieval (BM25)
+    tokenized_query = query.lower().split()
+    bm25_scores = bm25.get_scores(tokenized_query)
+    top_bm25_indices = bm25_scores.argsort()[-min(5, len(kb_corpus)):][::-1]
+    sparse_docs = [kb_corpus[i] for i in top_bm25_indices]
+
+    # 2. Dense Retrieval (ChromaDB)
+    emb_list = query_emb.tolist() if hasattr(query_emb, "tolist") else query_emb
+    dense_results = kb_collection.query(
+        query_embeddings=[emb_list], 
+        n_results=min(5, len(kb_corpus))
+    )
+    dense_docs = dense_results["documents"][0] if dense_results["documents"] else []
+
+    # 3. Combine and Deduplicate
+    unique_docs = list(set(sparse_docs + dense_docs))
+    if not unique_docs:
+        return []
+
+    # 4. Rerank with Cross-Encoder
+    pairs = [[query, doc] for doc in unique_docs]
+    rerank_scores = reranker.predict(pairs)
     
-    # Your existing search & rerank code follows right here...
-    ))
-    complex_indicators = ["compare", "architecture", "tradeoff", "synthesize", "evaluate", "why", "how does"]
-    query_lower = query.lower()
-    word_count = len(query.split())
-
-    if centroid_sim > 0.45 or word_count > 18 or any(kw in query_lower for kw in complex_indicators):
-        return "gemini-2.5-flash", "complex_analytical"
-    return "gemini-2.0-flash", "simple_factual"
-
-    if centroid_sim > 0.45 or word_count > 18 or any(kw in query_lower for kw in complex_indicators):
-        return "gemini-2.5-flash", "complex_analytical"
-    return "gemini-2.0-flash", "simple_factual"
+    # Sort by highest score first and return the top_k documents
+    ranked_indices = rerank_scores.argsort()[::-1]
+    return [unique_docs[i] for i in ranked_indices[:top_k]]
     # 2. Sparse BM25 retrieval (top 5)
     sparse_docs = []
     if bm25:

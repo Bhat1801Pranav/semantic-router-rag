@@ -7,7 +7,6 @@ import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
 import chromadb
 import google.generativeai as genai

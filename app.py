@@ -4,41 +4,42 @@ import requests
 st.title("Enterprise Hybrid RAG Pipeline 💬")
 st.caption("Powered by FastAPI, ChromaDB, and Gemini AI")
 
-# 1. Initialize the chat history in Streamlit's session state
+BACKEND_URL = "https://semantic-router-rag.onrender.com/query"
+
+# 1. Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 2. Display previous chat messages when the app reruns
+# 2. Render existing conversation history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 3. Accept user input at the bottom of the screen
+# 3. Handle new user input
 if prompt := st.chat_input("Ask a question about the documents..."):
-    
-    # Display the user's question instantly
     with st.chat_message("user"):
         st.markdown(prompt)
-    
-    # Save the user's question to history
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # 4. Fetch and display the AI's response
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
+        full_response = ""
         
         try:
-            # ---> PASTE YOUR EXISTING BACKEND REQUEST HERE <---
-            # Example: response = requests.post("YOUR_RENDER_URL", json={"query": prompt})
-            # answer = response.text
-            
-            # (Replace this placeholder variable with your actual backend answer)
-            answer = "This is where your FastAPI backend answer will appear."
-            
-            message_placeholder.markdown(answer)
-            
-            # Save the AI's answer to history so it stays on screen
-            st.session_state.messages.append({"role": "assistant", "content": answer})
-            
+            with requests.post(
+                BACKEND_URL,
+                json={"query": prompt},
+                stream=True,
+                timeout=120
+            ) as response:
+                if response.status_code == 200:
+                    for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+                        if chunk:
+                            full_response += chunk
+                            message_placeholder.markdown(full_response + "▌")
+                    message_placeholder.markdown(full_response)
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+                else:
+                    st.error(f"Backend Error {response.status_code}: {response.text}")
         except Exception as e:
-            st.error(f"Backend Error: {e}")
+            st.error(f"Connection Error: {e}")

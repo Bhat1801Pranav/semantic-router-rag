@@ -74,4 +74,4 @@ kb_collection.upsert(
     embeddings=embeddings
 )
 
-print("Ingestion complete! Total items in knowledge_base:", kb_collection.count())
+print("Ingestion complete! Total items in knowledge_base:", kb_collection.count())Remove-Item -Recurse -Force chroma_db

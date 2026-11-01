@@ -88,23 +88,19 @@ system_metrics = {
 
 class QueryRequest(BaseModel):
     query: str
-
 def select_model_tier(query: str, query_emb) -> tuple[str, str]:
     """Classifies query using embedding distance to analytical centroid + lexical heuristics."""
-    norm_q = query_emb / np.linalg.norm(query_emb)
-    norm_c = analytical_centroid / np.linalg.norm(analytical_centroid)
-    centroid_sim = float(np.dot(norm_q, norm_c))
-
-    complex_indicators = [
-        "compare", "architecture", "design", "analyze", "tradeoff",
-        "why", "how does", "implement", "difference", "evaluate", "pipeline"
-    ]
+    centroid_sim = float(np.dot(query_emb, analytical_centroid) / (
+        np.linalg.norm(query_emb) * np.linalg.norm(analytical_centroid) + 1e-10
+    ))
+    complex_indicators = ["compare", "architecture", "tradeoff", "synthesize", "evaluate", "why", "how does"]
     query_lower = query.lower()
     word_count = len(query.split())
 
     if centroid_sim > 0.45 or word_count > 18 or any(kw in query_lower for kw in complex_indicators):
-        return "gemini-3.8-flash", "complex_analytical"
-    return "gemini-3.5-flash", "simple_factual"
+        return "gemini-2.5-flash", "complex_analytical"
+    return "gemini-2.0-flash", "simple_factual"
+
 
 def hybrid_search_and_rerank(query: str, query_emb, top_k: int = 2) -> list[str]:
     """Combines BM25 sparse retrieval + Chroma dense retrieval, then reranks with Cross-Encoder."""

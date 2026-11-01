@@ -2,6 +2,7 @@ import os
 import time
 import uuid
 import json
+import gc
 import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -20,14 +21,19 @@ if api_key:
 
 app = FastAPI(title="Advanced Enterprise RAG Pipeline")
 
-# --- MODELS & PERSISTENCE ---
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+# --- MODELS & PERSISTENCE (Memory-Optimized for 512MB RAM) ---
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-kb_collection = chroma_client.get_or_create_collection(name="knowledge_base")
+# Pass embedding_function=None so ChromaDB doesn't load a duplicate ONNX model into RAM
+kb_collection = chroma_client.get_or_create_collection(
+    name="knowledge_base",
+    embedding_function=None
+)
 cache_collection = chroma_client.get_or_create_collection(
     name="semantic_cache",
+    embedding_function=None,
     metadata={"hnsw:space": "cosine"}
 )
 
@@ -35,31 +41,37 @@ cache_collection = chroma_client.get_or_create_collection(
 CACHE_DISTANCE_THRESHOLD = 0.12
 CACHE_TTL_SECONDS = 86400  # 24-hour Time-To-Live
 
-# --- AUTO-SEED KNOWLEDGE BASE ON STARTUP IF EMPTY ---
-if kb_collection.count() == 0:
-    seed_docs = [
-        "Project Alpha is the next-generation autonomous edge AI platform designed for low-latency inferencing on decentralized micro-servers. It is targeted for launch in Q3 2027 and is led by the core Systems & Applied AI team.",
-        "Project Alpha architecture utilizes a hybrid retrieval-augmented generation (RAG) system paired with semantic routing to minimize API token consumption and improve query response times under 200 milliseconds.",
-        "Project Beta is a data synchronization pipeline that facilitates automated ETL transfers between local SQLite instances and distributed analytical warehouses.",
-        "The Enterprise RAG Pipeline uses ChromaDB as its vector store, BM25Okapi for sparse keyword retrieval, CrossEncoder (ms-marco-MiniLM-L-6-v2) for reranking, and sentence-transformers (all-MiniLM-L6-v2) for local dense embeddings."
-    ]
-    seed_meta = [
-        {"source": "project_alpha_spec.pdf", "topic": "Project Alpha Overview"},
-        {"source": "project_alpha_architecture.md", "topic": "Project Alpha Tech Stack"},
-        {"source": "project_beta_overview.txt", "topic": "Project Beta Overview"},
-        {"source": "rag_infra_doc.md", "topic": "Infrastructure Overview"}
-    ]
-    seed_ids = [f"doc_{i+1}" for i in range(len(seed_docs))]
-    seed_embs = embedding_model.encode(seed_docs).tolist()
-    kb_collection.upsert(ids=seed_ids, documents=seed_docs, metadatas=seed_meta, embeddings=seed_embs)
-    if cache_collection.count() > 0:
-        cache_collection.delete(ids=cache_collection.get()["ids"])
+# --- LAZY SEEDING & BM25 INDEXING (Runs after server port binds) ---
+kb_corpus = []
+bm25 = None
 
-# --- REBUILD BM25 SPARSE INDEX ON STARTUP ---
-all_docs = kb_collection.get()
-kb_corpus = all_docs["documents"] if all_docs and all_docs["documents"] else []
-tokenized_corpus = [doc.lower().split() for doc in kb_corpus]
-bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
+def ensure_kb_ready():
+    global kb_corpus, bm25
+    if kb_collection.count() == 0:
+        seed_docs = [
+            "Project Alpha is the next-generation autonomous edge AI platform designed for low-latency inferencing on decentralized micro-servers. It is targeted for launch in Q3 2027 and is led by the core Systems & Applied AI team.",
+            "Project Alpha architecture utilizes a hybrid retrieval-augmented generation (RAG) system paired with semantic routing to minimize API token consumption and improve query response times under 200 milliseconds.",
+            "Project Beta is a data synchronization pipeline that facilitates automated ETL transfers between local SQLite instances and distributed analytical warehouses.",
+            "The Enterprise RAG Pipeline uses ChromaDB as its vector store, BM25Okapi for sparse keyword retrieval, CrossEncoder (ms-marco-MiniLM-L-6-v2) for reranking, and sentence-transformers (all-MiniLM-L6-v2) for local dense embeddings."
+        ]
+        seed_meta = [
+            {"source": "project_alpha_spec.pdf", "topic": "Project Alpha Overview"},
+            {"source": "project_alpha_architecture.md", "topic": "Project Alpha Tech Stack"},
+            {"source": "project_beta_overview.txt", "topic": "Project Beta Overview"},
+            {"source": "rag_infra_doc.md", "topic": "Infrastructure Overview"}
+        ]
+        seed_ids = [f"doc_{i+1}" for i in range(len(seed_docs))]
+        seed_embs = embedding_model.encode(seed_docs).tolist()
+        kb_collection.upsert(ids=seed_ids, documents=seed_docs, metadatas=seed_meta, embeddings=seed_embs)
+        if cache_collection.count() > 0:
+            cache_collection.delete(ids=cache_collection.get()["ids"])
+        gc.collect()
+
+    if not kb_corpus:
+        all_docs = kb_collection.get()
+        kb_corpus = all_docs["documents"] if all_docs and all_docs["documents"] else []
+        tokenized_corpus = [doc.lower().split() for doc in kb_corpus]
+        bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
 
 # --- EMBEDDING CENTROIDS FOR COMPLEXITY CLASSIFICATION ---
 analytical_anchors = [
@@ -69,6 +81,7 @@ analytical_anchors = [
 ]
 anchor_embeddings = embedding_model.encode(analytical_anchors)
 analytical_centroid = anchor_embeddings.mean(axis=0)
+gc.collect()
 
 # --- IN-MEMORY METRICS STORE ---
 system_metrics = {
@@ -88,6 +101,7 @@ system_metrics = {
 
 class QueryRequest(BaseModel):
     query: str
+
 def select_model_tier(query: str, query_emb) -> tuple[str, str]:
     """Classifies query using embedding distance to analytical centroid + lexical heuristics."""
     centroid_sim = float(np.dot(query_emb, analytical_centroid) / (
@@ -101,16 +115,25 @@ def select_model_tier(query: str, query_emb) -> tuple[str, str]:
         return "gemini-2.5-flash", "complex_analytical"
     return "gemini-2.0-flash", "simple_factual"
 
-
 def hybrid_search_and_rerank(query: str, query_emb, top_k: int = 2) -> list[str]:
     """Combines BM25 sparse retrieval + Chroma dense retrieval, then reranks with Cross-Encoder."""
+    ensure_kb_ready()
     if not kb_corpus:
         return []
+    
+    # Your existing search & rerank code follows right here...
+    ))
+    complex_indicators = ["compare", "architecture", "tradeoff", "synthesize", "evaluate", "why", "how does"]
+    query_lower = query.lower()
+    word_count = len(query.split())
 
-    # 1. Dense retrieval (top 5)
-    dense_results = kb_collection.query(query_embeddings=[query_emb.tolist()], n_results=min(5, len(kb_corpus)))
-    dense_docs = dense_results["documents"][0] if dense_results["documents"] else []
+    if centroid_sim > 0.45 or word_count > 18 or any(kw in query_lower for kw in complex_indicators):
+        return "gemini-2.5-flash", "complex_analytical"
+    return "gemini-2.0-flash", "simple_factual"
 
+    if centroid_sim > 0.45 or word_count > 18 or any(kw in query_lower for kw in complex_indicators):
+        return "gemini-2.5-flash", "complex_analytical"
+    return "gemini-2.0-flash", "simple_factual"
     # 2. Sparse BM25 retrieval (top 5)
     sparse_docs = []
     if bm25:

@@ -1,32 +1,18 @@
-import os
-import chromadb
-from chromadb.utils import embedding_functions
+from sentence_transformers import SentenceTransformer
+import main
 
-# 1. Target the persistent chroma_db folder used by your backend
-CHROMA_PATH = "./chroma_db"
-os.makedirs(CHROMA_PATH, exist_ok=True)
+print("Connecting directly to main.py's kb_collection and cache_collection...")
 
-print("Connecting to ChromaDB...")
-client = chromadb.PersistentClient(path=CHROMA_PATH)
-
-# Use default all-MiniLM-L6-v2 embeddings matching sentence-transformers
-embedding_func = embedding_functions.DefaultEmbeddingFunction()
-
-# 2. Get or recreate the collection
-collection_name = "documents"
+# 1. Clear old cached "No relevant documents found" responses
 try:
-    client.delete_collection(name=collection_name)
-    print(f"Cleared existing '{collection_name}' collection.")
-except Exception:
-    pass
+    cached_items = main.cache_collection.get()
+    if cached_items and cached_items.get("ids"):
+        main.cache_collection.delete(ids=cached_items["ids"])
+        print(f"Cleared {len(cached_items['ids'])} stale entries from cache_collection.")
+except Exception as e:
+    print(f"Cache clear note: {e}")
 
-collection = client.create_collection(
-    name=collection_name,
-    embedding_function=embedding_func,
-    metadata={"hnsw:space": "cosine"}
-)
-
-# 3. Define the knowledge base documents
+# 2. Define the knowledge base documents
 documents = [
     (
         "Project Alpha is the next-generation autonomous edge AI platform designed for low-latency inferencing "
@@ -55,12 +41,16 @@ metadatas = [
 
 ids = [f"doc_{i+1}" for i in range(len(documents))]
 
-# 4. Ingest and persist
-print(f"Indexing {len(documents)} documents into ChromaDB...")
-collection.add(
+# 3. Compute embeddings using the exact model from main.py (or all-MiniLM-L6-v2)
+embedder = getattr(main, "embedder", None) or getattr(main, "embedding_model", None) or SentenceTransformer("all-MiniLM-L6-v2")
+embeddings = embedder.encode(documents).tolist()
+
+# 4. Upsert directly into main.kb_collection
+main.kb_collection.upsert(
+    ids=ids,
     documents=documents,
     metadatas=metadatas,
-    ids=ids
+    embeddings=embeddings
 )
 
-print("Ingestion complete! Total items in collection:", collection.count())
+print("Ingestion complete! Total items in kb_collection:", main.kb_collection.count())

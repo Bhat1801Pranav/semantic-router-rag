@@ -21,27 +21,54 @@ if api_key:
 
 app = FastAPI(title="Advanced Enterprise RAG Pipeline")
 
-# --- MODELS & PERSISTENCE (Memory-Optimized for 512MB RAM) ---
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
-reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
+# --- MODELS & PERSISTENCE (Ultra-Low Memory Proxy) ---
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
+kb_collection = chroma_client.get_or_create_collection(name="knowledge_base", embedding_function=None)
+cache_collection = chroma_client.get_or_create_collection(name="semantic_cache", embedding_function=None, metadata={"hnsw:space": "cosine"})
 
-# Pass embedding_function=None so ChromaDB doesn't load a duplicate ONNX model into RAM
-kb_collection = chroma_client.get_or_create_collection(
-    name="knowledge_base",
-    embedding_function=None
-)
-cache_collection = chroma_client.get_or_create_collection(
-    name="semantic_cache",
-    embedding_function=None,
-    metadata={"hnsw:space": "cosine"}
-)
+class MLProxy:
+    def __init__(self):
+        self.emb = None
+        self.rerank = None
+        self.centroid = None
+
+    def encode(self, *args, **kwargs):
+        if self.emb is None: self.load()
+        return self.emb.encode(*args, **kwargs)
+
+    def predict(self, *args, **kwargs):
+        if self.rerank is None: self.load()
+        return self.rerank.predict(*args, **kwargs)
+
+    def get_centroid(self):
+        if self.centroid is None: self.load()
+        return self.centroid
+
+    def load(self):
+        print("Lazy loading ML models to save RAM...")
+        from sentence_transformers import SentenceTransformer, CrossEncoder
+        import gc
+        self.emb = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+        gc.collect()
+        self.rerank = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
+        gc.collect()
+        anchors = [
+            "compare architectural tradeoffs between distributed engines",
+            "deep technical synthesis of failure modes and fault tolerance",
+            "evaluate bottlenecks, concurrency locks, and latency implications"
+        ]
+        self.centroid = self.emb.encode(anchors).mean(axis=0)
+        gc.collect()
+
+# Drop-in replacements for your existing global variables
+embedding_model = MLProxy()
+reranker = embedding_model 
 
 # Parameters
 CACHE_DISTANCE_THRESHOLD = 0.12
-CACHE_TTL_SECONDS = 86400  # 24-hour Time-To-Live
+CACHE_TTL_SECONDS = 86400
 
-# --- LAZY SEEDING & BM25 INDEXING (Runs after server port binds) ---
+# --- LAZY SEEDING & BM25 INDEXING ---
 kb_corpus = []
 bm25 = None
 
@@ -65,38 +92,20 @@ def ensure_kb_ready():
         kb_collection.upsert(ids=seed_ids, documents=seed_docs, metadatas=seed_meta, embeddings=seed_embs)
         if cache_collection.count() > 0:
             cache_collection.delete(ids=cache_collection.get()["ids"])
-        gc.collect()
+        import gc; gc.collect()
 
     if not kb_corpus:
         all_docs = kb_collection.get()
         kb_corpus = all_docs["documents"] if all_docs and all_docs["documents"] else []
-        tokenized_corpus = [doc.lower().split() for doc in kb_corpus]
-        bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
-
-# --- EMBEDDING CENTROIDS FOR COMPLEXITY CLASSIFICATION ---
-analytical_anchors = [
-    "compare architectural tradeoffs between distributed engines",
-    "deep technical synthesis of failure modes and fault tolerance",
-    "evaluate bottlenecks, concurrency locks, and latency implications"
-]
-anchor_embeddings = embedding_model.encode(analytical_anchors)
-analytical_centroid = anchor_embeddings.mean(axis=0)
-gc.collect()
+        if kb_corpus:
+            tokenized_corpus = [doc.lower().split() for doc in kb_corpus]
+            bm25 = BM25Okapi(tokenized_corpus)
 
 # --- IN-MEMORY METRICS STORE ---
 system_metrics = {
-    "total_queries": 0,
-    "cache_hits": 0,
-    "cache_misses": 0,
-    "evicted_expired_cache_items": 0,
-    "model_usage": {
-        "cache": 0,
-        "gemini-2.5-flash": 0,
-        "gemini-2.0-flash": 0,
-        "local-extractive-fallback": 0
-    },
-    "latencies_ms": {"cache_hit": [], "llm_inference": []},
-    "rag_evaluations": []
+    "total_queries": 0, "cache_hits": 0, "cache_misses": 0, "evicted_expired_cache_items": 0,
+    "model_usage": {"cache": 0, "gemini-2.5-flash": 0, "gemini-2.0-flash": 0, "local-extractive-fallback": 0},
+    "latencies_ms": {"cache_hit": [], "llm_inference": []}, "rag_evaluations": []
 }
 
 class QueryRequest(BaseModel):
@@ -104,8 +113,9 @@ class QueryRequest(BaseModel):
 
 def select_model_tier(query: str, query_emb) -> tuple[str, str]:
     """Classifies query using embedding distance to analytical centroid + lexical heuristics."""
-    centroid_sim = float(np.dot(query_emb, analytical_centroid) / (
-        np.linalg.norm(query_emb) * np.linalg.norm(analytical_centroid) + 1e-10
+    centroid = embedding_model.get_centroid()
+    centroid_sim = float(np.dot(query_emb, centroid) / (
+        np.linalg.norm(query_emb) * np.linalg.norm(centroid) + 1e-10
     ))
     complex_indicators = ["compare", "architecture", "tradeoff", "synthesize", "evaluate", "why", "how does"]
     query_lower = query.lower()
